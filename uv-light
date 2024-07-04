@@ -1,0 +1,113 @@
+// Supported Shelly firmwares: 1.0.3 - 1.2.3. Script version: 2024-03-03
+
+// NOTE! This script works only with "Shelly Plus Plug S" -smart plug
+
+const UnknownPriceColor = [0, 0, 100]; // Blue
+function Run() {
+        let currentHour = new Date().getHours();
+        print(currentHour)
+        print("PlusPlugS-StreetLight: Hour has changed, getting what color the LED light should be...");
+        if ((currentHour < 7) || (currentHour > 16)) {
+          ChangeColor(UnknownPriceColor, 0)
+          return
+        } 
+        Shelly.call("HTTP.Request", {
+          method: "GET",
+          url: "https://api.openuv.io/api/v1/uv?lat=60.47&lng=22.30&alt=100&dt=", // put location here
+          headers: {
+               'x-access-token': 'xxxxxxx', // token here
+           }
+        }, ProcessResponse);
+    
+}
+
+function ChangeColor(color, brightness) {
+    let config;
+    Shelly.call("PLUGS_UI.GetConfig", null, function (response) { 
+       config = response; 
+       config.leds.mode = "switch";
+       config.leds.colors["switch:0"].on.rgb = color;
+       config.leds.colors["switch:0"].on.brightness = brightness;
+       config.leds.colors["switch:0"].off.rgb = color;
+       config.leds.colors["switch:0"].off.brightness = brightness;
+       let urlToUpdateColor = "http://localhost/rpc/PLUGS_UI.SetConfig?config=" + JSON.stringify(config);
+       Shelly.call("HTTP.Request", { method: "GET", url: urlToUpdateColor, timeout: 15, ssl_ca: "*" }, ProcessColorChangeResponse);
+     });
+   
+}
+
+// Helper function to interpolate between two colors
+function interpolateColor(color1, color2, factor) {
+    let result = color1.slice(); // Copy the first color
+    for (let i = 0; i < 3; i++) {
+        // Interpolate between each channel
+        result[i] = Math.round(result[i] + factor * (color2[i] - color1[i]));
+    }
+    return result;
+}
+
+// Function to determine color based on current UVI with smooth transitions
+function getColorByUVI(currentUVI) {
+    print(currentUVI);
+    print("asdasd");
+
+    if (currentUVI < 2) {
+        return [0, 50, 0]; // Green (0-100 scale)
+    } else if (currentUVI < 3) {
+        let factor = (currentUVI - 2) / 1; // Interpolation factor
+        return interpolateColor([0, 50, 0], [100, 100, 0], factor); // Green to Yellow
+    } else if (currentUVI < 4.5) {
+        let factor = (currentUVI - 3) / 1.5; // Interpolation factor
+        return interpolateColor([100, 100, 0], [100, 0, 0], factor); // Yellow to Red
+    } else if (currentUVI < 6) {
+        let factor = (currentUVI - 4.5) / 1.5; // Interpolation factor
+        return interpolateColor([100, 0, 0], [78, 63, 78], factor); // Red to Lilac
+    } else {
+        return [78, 63, 78]; // Lilac for UVI 7 and above
+    }
+}
+// Function to calculate brightness based on maximum UVI
+function getBrightnessByMaxUVI(maxUVI) {
+    let brightness = Math.round(((maxUVI-1) / 4) * 100);
+    return brightness > 100 ? 100 : brightness; // Cap the brightness at 100
+}
+
+Timer.set(60000 * 15, true, Run);
+
+function ProcessResponse(response, error_code) {
+     
+    if (error_code === 0 && response !== null && response.code === 200) {
+         // print(response)
+
+          let asObj = JSON.parse(response.body)
+          let currentHour = new Date().getHours();
+          if (currentHour < 10) {
+             const color = getColorByUVI(asObj.result.uv_max);
+          } else {
+                      const color = getColorByUVI(asObj.result.uv);
+          }
+          print(asObj.result.uv)
+          const brightness = getBrightnessByMaxUVI(asObj.result.uv_max);
+          print(asObj.result.uv_max)
+          print(color)
+          print(brightness)
+          print("?????????????????????????????????????????")
+          ChangeColor(color, 100)
+    }
+    else {
+        print("PlusPlugS-StreetLight: An error occurred while fetching rank data"); ChangeColor(UnknownPriceColor); currentHour = -1;
+    }
+}
+
+
+
+function ProcessColorChangeResponse(response, error_code, error_msg) {
+
+    if (error_code === 0 && response !== null) {
+        print("PlusPlugS-StreetLight: Successfully changed the color of the led.");
+        return;
+    }
+
+    print("PlusPlugS-StreetLight: Color change was not successful. Error code: " + error_code + " - Error message: " + error_msg);
+    currentHour = -1;
+}
